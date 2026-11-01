@@ -1901,3 +1901,21 @@ input::placeholder {
     scroll-behavior: auto !important;
   }
 }
+
+/* Keep long bilingual hazard instructions readable on phone widths. */
+.electrical-hazard {
+  display: block;
+  margin: 1rem;
+  padding: 1rem;
+  color: #674c1f;
+  background: #fff6e5;
+  border: 1px solid #e4c58d;
+  border-radius: 12px;
+  line-height: 1.65;
+}
+.electrical-hazard a {
+  display: block;
+  margin-top: 0.6rem;
+  font-weight: 600;
+  text-decoration: underline;
+}

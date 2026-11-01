@@ -14,7 +14,9 @@ export const demoOfficers: Record<Department, string> = {
   roads: "Arun · Demo Roads Officer",
   water: "Meena · Demo Water Officer",
   waste: "Kavya · Demo Sanitation Officer",
-  lighting: "Rahul · Demo Electrical Officer",
+  lighting: "Rahul · Demo Streetlight Officer",
+  electricity: "Nila · Demo Distribution Officer",
+  stormwater: "Dev · Demo Drainage Officer",
   review: "Priya · Demo Triage Officer",
 };
 export function loadDemo(): Complaint[] {
@@ -101,6 +103,14 @@ export async function submit(d: Draft): Promise<Complaint> {
     saveDemo([c, ...loadDemo()]);
     return c;
   }
+  // Fail closed on old/missing hosted schema. Never rerun initial setup automatically.
+  const version = await db().rpc("routing_version");
+  if (version.error || version.data !== "202611010002")
+    throw new Error(
+      d.language === "ta"
+        ? "பாதுகாப்பான வழிமாற்ற தரவுத்தள மேம்பாடு தேவை. நிர்வாகியைத் தொடர்புகொள்ளவும். புகார் சமர்ப்பிக்கப்படவில்லை."
+        : "Safe routing database upgrade required. Contact the project administrator. Your report has not been submitted.",
+    );
   const { data, error } = await db().rpc("submit_complaint", { p_draft: d });
   if (error) throw new Error(error.message);
   const cases = await listComplaints();

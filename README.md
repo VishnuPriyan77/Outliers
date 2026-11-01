@@ -2,7 +2,7 @@
 
 A Chennai civic grievance MVP: bilingual conversational intake → citizen-confirmed classification → deterministic simulated department routing → private evidence → officer actions → citizen verification or one appeal. Built with Next.js, React, TypeScript, OpenRouter and Supabase.
 
-**Government integration is simulated.** Department names are illustrative routing destinations and all officer identities are fictional. No reports, SMS or emails are sent to government agencies. No claim of perfect classification or media authenticity is made.
+**Government integration is simulated.** Agency names follow official sources; assignments remain simulated and all officer identities are fictional. No reports, SMS or emails are sent to government agencies. No claim of perfect classification or media authenticity is made.
 
 ## Run immediately
 
@@ -10,15 +10,14 @@ Use Node.js 24 LTS.
 
 ```sh
 npm ci
-cp .env.example .env.local
-npm run dev
+npm run dev:demo
 ```
 
 Open http://localhost:3000. Demo mode works without credentials: three illustrative reports, browser-only persistence, private-to-this-browser evidence stored in IndexedDB, and a switchable fictional officer workspace. Demo data is shared by people using the same browser profile; do not use it for sensitive reports. Clearing site data resets the demo. The OpenRouter server endpoint is disabled in demo mode to prevent anonymous spending.
 
 ## Enable Supabase and OpenRouter
 
-1. In your Supabase project's SQL Editor, run `supabase/migrations/202611010001_civiclens.sql` once. It creates the tables, RLS policies, private evidence bucket, transactional workflow functions and daily AI quota. For CLI-managed projects use `supabase link --project-ref YOUR_REF` followed by `supabase db push` after reviewing the migration.
+1. Inspect the remote schema and migration history with `supabase/routing_preflight.sql` first. A new project requires the initial migration and then `202611010002_verified_routing.sql`; an existing project needs only missing migrations after inspecting actual definitions. Do not blindly rerun initial setup. See [local development and safe upgrades](docs/LOCAL_DEVELOPMENT.md).
 2. Privately fill `.env.local` using `.env.example`. Set `NEXT_PUBLIC_DEMO_MODE=false`, the project URL and publishable key. Add the **server-only** service-role key to finalize checked evidence metadata. Never prefix secret keys with `NEXT_PUBLIC_` or commit them.
 3. Add `OPENROUTER_API_KEY` and an available `OPENROUTER_MODEL` supporting JSON output. The app makes server-side Chat Completions requests only to OpenRouter. If the key, model or provider is unavailable, deterministic guided intake still works. No Gemini dependency is assumed. Each account is limited to 30 AI requests per day in Postgres.
 4. Restart the app. Create citizen accounts in the UI and confirm their emails. Configure the Supabase Auth Site URL and redirect allowlist for your actual host. Standard email/password Supabase sessions are used; server endpoints validate the bearer token with `auth.getUser`.
@@ -26,13 +25,13 @@ Open http://localhost:3000. Demo mode works without credentials: three illustrat
 
 ## Vercel deployment
 
-See [deployment instructions](docs/DEPLOYMENT.md). `vercel.json` selects the Next.js build and Mumbai function region. The ready-to-enable GitHub Actions template at `docs/github-actions-ci.yml` runs type checking, database/domain/API tests, production build and desktop/mobile browser tests. To activate it, grant your GitHub login the `workflow` scope and move it to `.github/workflows/ci.yml`. Deploy with demo mode first or configure Supabase before enabling connected mode. This repository does not contain a live deployment or applied remote migrations until those steps are performed.
+See [deployment instructions](docs/DEPLOYMENT.md). `vercel.json` selects the Next.js build and Mumbai function region. The ready-to-enable GitHub Actions template at `docs/github-actions-ci.yml` runs type checking, database/domain/API tests, production build and desktop/mobile browser tests. To activate it, grant your GitHub login the `workflow` scope and move it to `.github/workflows/ci.yml`. Deploy with demo mode first or configure Supabase before enabling connected mode. The existing hosted app is at https://outliers-six.vercel.app. A Ready build does not establish that hosted database migrations or authenticated flows work. The new routing capability must be applied and verified before production activation.
 
 ## What works
 
 - Responsive English/Tamil UI and four-step intake; one question at a time. OpenRouter proposes an enum-validated category, urgency and follow-up. The citizen can edit every report field before confirming.
-- Categories: road damage, water/sewerage, waste, street lighting, and human triage. Unknown ownership, unsupported jurisdiction and uncertain categories route to the review desk. Departments are selected by fixed TypeScript **and SQL** rules, never arbitrary model strings.
-- Citizen-provided Chennai address and ownership declaration. Exact jurisdiction and road ownership remain unverified; no geocoding or verified government directory is implied.
+- Categories: road damage, water/sewerage, waste, street lighting, electricity distribution, stormwater drainage, and human triage. Unknown ownership, unsupported jurisdiction and uncertain categories route to the review desk. Departments are selected by fixed TypeScript **and SQL** rules, never arbitrary model strings.
+- Citizen-provided Chennai address and ownership declaration. Agency remits are sourced from official pages; exact asset ownership remains unverified and no geocoding is performed. See [routing research and coverage](docs/ROUTING_RESEARCH.md).
 - Permanent UUID and readable tracking reference, 21-day ordinary / 1-day priority **CivicLens internal targets**, visible overdue state and append-only event records. An expired target never closes a case.
 - Department-scoped officer queue, acknowledgement, work assignment, forwarding with a reason, resolution proof and citizen closure. After an appeal, fresh resolution evidence is required. One appeal is enforced transactionally with a row lock.
 - Private JPEG/PNG/WebP/MP3/WAV/MP4 intake, maximum 4 MB per file and ten attachments per case. Server-side file signature checks, SHA-256 and exact duplicate checks within the case. The 4 MB limit fits Vercel's function request payload ceiling. Original file bytes are preserved. A signature check is **not a full media decode, malware scan or authenticity assessment**.

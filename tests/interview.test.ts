@@ -42,26 +42,27 @@ it("enforces a persistent account quota before the provider call", async () => {
   expect(fetch).not.toHaveBeenCalled();
 });
 it("uses OpenRouter and returns only validated category suggestions", async () => {
-  const fetch = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                content: JSON.stringify({
-                  category: "road",
-                  urgent: false,
-                  summary: "Road damage",
-                  question: "Which street?",
-                }),
-              },
+  const fetch = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                category: "road",
+                urgent: false,
+                summary: "Road damage",
+                question: "Which street?",
+                confidence: 0.95,
+                evidence: ["pothole"],
+                needsReview: false,
+              }),
             },
-          ],
-        }),
-      ),
-    );
+          },
+        ],
+      }),
+    ),
+  );
   vi.stubGlobal("fetch", fetch);
   const data = await (await POST(request(input))).json();
   expect(data.category).toBe("road");
@@ -104,4 +105,80 @@ it("rejects oversized request bodies before invoking the provider", async () => 
     (await POST(request({ ...input, description: "a".repeat(20000) }))).status,
   ).toBe(400);
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["A cut electric power line is lying on the road", "electricity", false],
+  ["சாலையில் மின்கம்பி அறுந்து கிடக்கிறது", "electricity", false],
+  ["Street light cable is cut and sparking", "other", false],
+  ["There is garbage outside my house", "other", false],
+  ["A large pothole blocks the road near my house.", "other", true],
+])(
+  "guards against plausible but wrong model labels: %s",
+  async (description, expected, ungrounded) => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      category: "road",
+                      urgent: false,
+                      summary: "Road",
+                      question: "Where?",
+                      confidence: 0.99,
+                      evidence: [ungrounded ? "invented quote" : description],
+                      needsReview: false,
+                    }),
+                  },
+                },
+              ],
+            }),
+          ),
+        ),
+    );
+    const data = await (
+      await POST(request({ description, language: "en" }))
+    ).json();
+    expect(data.category).toBe(expected);
+    if (/power line|மின்கம்பி|sparking/.test(description))
+      expect(data.urgent).toBe(true);
+  },
+);
+it("rejects extra authority claims and low-confidence model output", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    category: "road",
+                    urgent: false,
+                    summary: "Road",
+                    question: "Where?",
+                    confidence: 0.4,
+                    evidence: ["pothole"],
+                    needsReview: false,
+                    department: "roads",
+                  }),
+                },
+              },
+            ],
+          }),
+        ),
+      ),
+  );
+  const data = await (await POST(request(input))).json();
+  expect(data.category).toBe("other");
+  expect(data.department).toBeUndefined();
 });

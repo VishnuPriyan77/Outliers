@@ -4,6 +4,8 @@ export const categories = [
   "water",
   "waste",
   "lighting",
+  "electricity",
+  "stormwater",
   "other",
 ] as const;
 export type Category = (typeof categories)[number];
@@ -13,6 +15,11 @@ export const categoryNames: Record<Category, [string, string]> = {
   water: ["Water & sewerage", "குடிநீர் & கழிவுநீர்"],
   waste: ["Waste & sanitation", "குப்பை & சுகாதாரம்"],
   lighting: ["Street lighting", "தெரு விளக்குகள்"],
+  electricity: [
+    "Electricity supply & power lines",
+    "மின் விநியோகம் & மின் கம்பிகள்",
+  ],
+  stormwater: ["Stormwater drainage", "மழைநீர் வடிகால்"],
   other: ["Needs review", "பரிசீலனை தேவை"],
 };
 export const departments = {
@@ -20,6 +27,8 @@ export const departments = {
   water: "CMWSSB · Water & Sewerage",
   waste: "GCC · Solid Waste",
   lighting: "GCC · Electrical",
+  electricity: "TNPDCL · Electricity Distribution",
+  stormwater: "GCC · Storm Water Drains",
   review: "CivicLens · Triage Desk",
 } as const;
 export type Department = keyof typeof departments;
@@ -49,8 +58,9 @@ export const draftSchema = z.object({
   ownership: z.enum(["municipal", "unknown"]),
   urgent: z.boolean(),
   consent: z.literal(true),
+  assetOwner: z.enum(["public", "private", "unknown"]).default("unknown"),
 });
-export type Draft = z.infer<typeof draftSchema>;
+export type Draft = z.input<typeof draftSchema>;
 export type Evidence = {
   id: string;
   name: string;
@@ -75,6 +85,7 @@ export type Complaint = Draft & {
   id: string;
   reference: string;
   department: Department;
+  routing?: RoutingDecision;
   status: Status;
   created_at: string;
   due_at: string;
@@ -82,41 +93,242 @@ export type Complaint = Draft & {
   evidence: Evidence[];
   events: AuditEvent[];
 };
-export function route(
-  d: Pick<Draft, "category" | "chennai" | "ownership">,
-): Department {
-  if (
-    !d.chennai ||
-    d.category === "other" ||
-    (d.category === "road" && d.ownership !== "municipal")
-  )
-    return "review";
-  return (
-    {
-      road: "roads",
-      water: "water",
-      waste: "waste",
-      lighting: "lighting",
-    } as const
-  )[d.category];
-}
-const terms: Record<Exclude<Category, "other">, RegExp> = {
-  road: /pothole|road|bridge|சாலை|குழி|பாலம்/iu,
-  water: /water|sewag|drain|pipe|குடிநீர்|கழிவுநீர்|குழாய்|தண்ணீர்/iu,
-  waste: /garbage|rubbish|trash|waste|குப்பை/iu,
-  lighting: /street\s*light|lamp|தெரு\s*விளக்கு/iu,
+// Sources are versioned separately from any model response. No government submission occurs.
+export const ROUTING_VERSION = "202611010002";
+export const authorities = {
+  roads: {
+    parent: "Municipal Administration and Water Supply",
+    source: "https://chennaicorporation.gov.in/gcc/department/road/",
+    scope:
+      "Citizen-reported municipal road; asset ownership needs verification.",
+  },
+  water: {
+    parent: "Municipal Administration and Water Supply",
+    source: "https://cmwssb.tn.gov.in/",
+    scope: "CMWSSB water supply and sewerage; not stormwater drains.",
+  },
+  waste: {
+    parent: "Municipal Administration and Water Supply",
+    source:
+      "https://chennaicorporation.gov.in/gcc/department/solid-waste-management/",
+    scope: "GCC municipal solid waste collection.",
+  },
+  lighting: {
+    parent: "Municipal Administration and Water Supply",
+    source: "https://chennaicorporation.gov.in/gcc/department/electrical/",
+    scope:
+      "GCC streetlights and their electrical assets; not distribution lines.",
+  },
+  electricity: {
+    parent: "Energy",
+    source: "https://www.tnpdcl.org/en/tnpdcl/about-us/tnpdcl-profile/",
+    scope:
+      "TNPDCL distribution network. Local section/circle must verify the asset; private or transmission assets need triage.",
+  },
+  stormwater: {
+    parent: "Municipal Administration and Water Supply",
+    source: "https://chennaicorporation.gov.in/gcc/department/storm-water/",
+    scope:
+      "GCC stormwater drains; not CMWSSB sewers or Water Resources rivers.",
+  },
+  review: {
+    parent: "CivicLens (simulation)",
+    source: "https://www.tn.gov.in/document_dept_list.php?cate_name=YWxs",
+    scope:
+      "Human verification of category, ownership and competent authority required.",
+  },
+} as const;
+export type Classification = {
+  category: Category;
+  confidence: "supported" | "uncertain";
+  reason:
+    | "electrical_hazard"
+    | "single_service"
+    | "multiple_services"
+    | "insufficient_detail";
+  evidence: string[];
+  hazard: boolean;
 };
-export function classify(text: string): Category {
-  const matches = (Object.keys(terms) as Exclude<Category, "other">[]).filter(
-    (c) => terms[c].test(text),
+// English, Tamil and common Tamil transliterations. Location words alone are never a road defect.
+const electricity =
+  /electric(?:al|ity)?|power\s*(?:line|cable|wire|supply|cut|outage)|live\s*wire|transformer|\b(?:tneb|tangedco|tnpdcl|eb)\b|மின்(?:சார|கம்பி| கம்பி| விநியோக|தடை)|மின்கம்ப|மின்சாரம்|மின்மாற்றி|min\s*kambi|current\s*(?:wire|kambi|cut)/iu;
+const wire =
+  /wire|cable|(?:power|transmission|electric)\s*line|கம்பி|கேபிள்|kambi/iu;
+const damage =
+  /cut|snapp|broken|fallen|\bdown\b|downed|dangl|hanging|exposed|spark|sever|leak|அறுந்த|துண்டி|வெட்ட|விழுந்|விழுந்த|தொங்க|வெளியே|தீப்பொறி|arunth|arundh/iu;
+const lighting =
+  /street\s*light|lamp\s*(?:post|not|broken)|தெரு\s*விளக்கு|தெருவிளக்கு/iu;
+const terms: Record<Exclude<Category, "other" | "electricity">, RegExp> = {
+  road: /pothole|road\s*(?:is\s*)?(?:damage|broken|crack|collapsed)|damaged\s*road|bridge\s*(?:damage|broken|collapse)|சாலை.{0,20}(?:குழி|சேத|உடை)|பாலம்.{0,20}(?:சேத|உடை)/iu,
+  water:
+    /sewag|sewer|drinking\s*water|water\s*(?:supply|leak|pipe)|pipe\s*(?:burst|broken|leak)|குடிநீர்|கழிவுநீர்|தண்ணீர்|குழாய்/iu,
+  waste: /garbage|rubbish|trash|waste|குப்பை/iu,
+  lighting,
+  stormwater: /storm\s*water|rain\s*water\s*drain|மழைநீர்\s*வடிகால்/iu,
+};
+const excludedAsset =
+  /\b(?:transmission|high[ -]voltage|telecom|broadband|internet|fibre|fiber|private wiring|internal wiring|inside (?:house|home|flat))\b|தொலைத்தொடர்பு|உயர்\s*அழுத்த|தனியார்\s*மின்/iu;
+export function analyze(text: string): Classification {
+  text = text.normalize("NFC");
+  const electrical = electricity.test(text);
+  // A streetlight cable explicitly belongs to GCC's electrical assets. An unspecified
+  // cut cable remains uncertain but still displays precautionary hazard guidance.
+  const lightCable =
+    /street\s*light.{0,12}(?:cable|wire)|(?:cable|wire).{0,12}(?:street\s*light)|தெரு\s*விளக்.{0,15}(?:கம்பி|கேபிள்)/iu.test(
+      text,
+    ) &&
+    wire.test(text) &&
+    !/power\s*line|distribution|transformer|மின்\s*விநியோக/iu.test(text);
+  const hazard =
+    (wire.test(text) && damage.test(text)) ||
+    /electrocut|live\s*wire|மின்சாரம் தாக்க|மின்.{0,20}தீப்பொறி/iu.test(text);
+  const uncertain =
+    /\b(?:not sure|unsure|maybe|hypothetical|what if|no (?:cut|fallen|live|broken)|not (?:cut|broken|damaged)|transmission|high[ -]voltage|telecom|broadband|internet|fibre|fiber)\b|தெரியவில்லை|உறுதியாக|தொலைத்தொடர்பு|உயர்\s*அழுத்த|அறுந்து?\s*இல்லை/iu.test(
+      text,
+    );
+  if (uncertain || excludedAsset.test(text))
+    return {
+      category: "other",
+      confidence: "uncertain",
+      reason: "insufficient_detail",
+      evidence: [],
+      hazard,
+    };
+  if (electrical && hazard && !lightCable)
+    return {
+      category: "electricity",
+      confidence: "supported",
+      reason: "electrical_hazard",
+      evidence: [
+        text.match(electricity)![0],
+        ...(text.match(damage) || []).slice(0, 1),
+      ],
+      hazard: true,
+    };
+  const matches = (Object.keys(terms) as (keyof typeof terms)[]).filter((c) =>
+    terms[c].test(text),
   );
-  return matches.length === 1 ? matches[0] : "other";
+  const found: Category[] = [...matches];
+  if (electrical && !lightCable && !lighting.test(text))
+    found.push("electricity");
+  // Generic water/pipe descriptions alongside a stormwater drain need clarification.
+  const category =
+    found.length === 1 && !(hazard && !electrical && !lightCable)
+      ? found[0]
+      : "other";
+  return {
+    category,
+    confidence: category === "other" ? "uncertain" : "supported",
+    reason:
+      found.length > 1
+        ? "multiple_services"
+        : category === "other"
+          ? "insufficient_detail"
+          : "single_service",
+    evidence:
+      category === "other"
+        ? []
+        : [
+            category === "electricity"
+              ? text.match(electricity)![0]
+              : text.match(terms[category])![0],
+          ],
+    hazard,
+  };
+}
+export function classify(text: string): Category {
+  return analyze(text).category;
 }
 export function urgentSignal(text: string) {
-  return /electrocut|live wire|fire|injur|immediate danger|மின்சாரம் தாக்க|தீ விபத்து|காயம்/iu.test(
-    text,
+  return (
+    analyze(text).hazard ||
+    /electrocut|fire|injur|immediate danger|மின்சாரம் தாக்க|தீ விபத்து|காயம்/iu.test(
+      text,
+    )
   );
 }
+export type RoutingInput = Pick<Draft, "category" | "chennai" | "ownership"> &
+  Partial<Pick<Draft, "description" | "impact" | "assetOwner" | "urgent">>;
+export type RoutingDecision = {
+  version: string;
+  department: Department;
+  reason: string;
+  reasonTa: string;
+  severity: "hazard" | "priority" | "routine";
+  humanReview: boolean;
+  source: string;
+  parent: string;
+};
+export function explainRoute(d: RoutingInput): RoutingDecision {
+  const signal = analyze([d.description, d.impact].filter(Boolean).join(" "));
+  let department: Department = "review";
+  let reason = "Category or asset ownership needs human verification.";
+  let reasonTa = "வகை அல்லது சொத்தின் பொறுப்பை மனிதர் சரிபார்க்க வேண்டும்.";
+  if (!d.chennai) {
+    reason = "Outside the Chennai pilot; local authority must be verified.";
+    reasonTa =
+      "சென்னை சோதனை எல்லைக்கு வெளியே; உள்ளூர் அதிகாரியைச் சரிபார்க்க வேண்டும்.";
+  } else if (d.assetOwner === "private") {
+    reason = "Private asset: public agency ownership cannot be assumed.";
+    reasonTa =
+      "தனியார் சொத்து: அரசு நிறுவனத்தின் பொறுப்பு என்று கருத முடியாது.";
+  } else if (
+    excludedAsset.test([d.description, d.impact].filter(Boolean).join(" "))
+  ) {
+    reason =
+      "Asset type is outside the verified service directory; human ownership verification required.";
+    reasonTa =
+      "இந்தச் சொத்து சரிபார்க்கப்பட்ட சேவை அடைவுக்கு வெளியே உள்ளது; பொறுப்பை மனிதர் சரிபார்க்க வேண்டும்.";
+  } else if (
+    signal.hazard &&
+    signal.category !== d.category &&
+    d.category !== "other"
+  ) {
+    reason =
+      "Safety signal conflicts with the chosen category. Confirm the electrical asset or request human triage.";
+    reasonTa =
+      "ஆபத்து அறிகுறியும் தேர்ந்தெடுத்த வகையும் முரண்படுகின்றன. மின் சொத்தை உறுதிசெய்யவும் அல்லது மனிதப் பரிசீலனை கோரவும்.";
+  } else if (
+    d.category !== "other" &&
+    !(d.category === "road" && d.ownership !== "municipal")
+  ) {
+    department = (
+      {
+        road: "roads",
+        water: "water",
+        waste: "waste",
+        lighting: "lighting",
+        electricity: "electricity",
+        stormwater: "stormwater",
+      } as const
+    )[d.category];
+    reason = authorities[department].scope;
+    reasonTa =
+      "உறுதிசெய்த சேவை வகை மற்றும் சென்னை இடத்தின் அடிப்படையில். உள்ளூர் சொத்தின் பொறுப்பை அதிகாரி சரிபார்க்க வேண்டும்.";
+  }
+  return {
+    version: ROUTING_VERSION,
+    department,
+    reason,
+    reasonTa,
+    severity: signal.hazard
+      ? "hazard"
+      : d.urgent ||
+          urgentSignal([d.description, d.impact].filter(Boolean).join(" "))
+        ? "priority"
+        : "routine",
+    humanReview: department === "review",
+    source: authorities[department].source,
+    parent: authorities[department].parent,
+  };
+}
+export function route(d: RoutingInput): Department {
+  return explainRoute(d).department;
+}
+export const electricalSafety = {
+  en: "Possible electrical hazard: keep away; do not touch or approach the wire, water or nearby objects. Do not approach to collect evidence. Contact TNPDCL Minnagam directly: 94987 94987. CivicLens does not alert emergency responders or government agencies.",
+  ta: "மின் ஆபத்து இருக்கலாம்: விலகி இருங்கள்; கம்பி, அருகிலுள்ள நீர் அல்லது பொருட்களைத் தொடவோ நெருங்கவோ வேண்டாம். ஆதாரம் சேகரிக்க அருகில் செல்ல வேண்டாம். TNPDCL மின்னகத்தை நேரடியாக அழைக்கவும்: 94987 94987. CivicLens அவசர உதவியையோ அரசு நிறுவனத்தையோ தொடர்புகொள்ளாது.",
+};
 export function allowedActions(
   c: Complaint,
   role: "citizen" | "officer",
@@ -176,14 +388,17 @@ export function transition(
   };
 }
 export function newComplaint(d: Draft): Complaint {
-  draftSchema.parse(d);
+  d = draftSchema.parse(d);
+  const routing = explainRoute(d);
+  d = { ...d, urgent: d.urgent || routing.severity !== "routine" };
   const id = crypto.randomUUID(),
     now = new Date();
   return {
     ...d,
     id,
     reference: `CL-${now.getFullYear()}-${id.slice(0, 8).toUpperCase()}`,
-    department: route(d),
+    department: routing.department,
+    routing,
     status: "submitted",
     created_at: now.toISOString(),
     due_at: new Date(

@@ -1,3 +1,5 @@
+import { routingCases } from "./routing-cases";
+import { analyze, explainRoute } from "../lib/domain";
 import { beforeAll, afterAll, it, expect } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
@@ -52,6 +54,12 @@ beforeAll(async () => {
       "supabase/migrations/202611010001_civiclens.sql",
       "utf8",
     ).replace("create extension if not exists pgcrypto;", ""),
+  );
+  await db.exec(
+    readFileSync(
+      "supabase/migrations/202611010002_verified_routing.sql",
+      "utf8",
+    ),
   );
   await db.query("insert into public.officials values($1,$2,$3),($4,$5,$6)", [
     roads,
@@ -236,4 +244,85 @@ it("permits only 30 AI calls per account per day", async () => {
       )
     ).rows[0].allowed,
   ).toBe(false);
+});
+
+it.each(routingCases)(
+  "keeps SQL classification in parity with client safety: %s",
+  async (description, category, hazard) => {
+    await as("", "postgres");
+    const result = await db.query<{ signal: unknown }>(
+      "select public.classification_signal($1) as signal",
+      [description],
+    );
+    expect(result.rows[0].signal).toEqual({ category, hazard });
+    expect(analyze(description)).toMatchObject({ category, hazard });
+  },
+);
+it.each([
+  {
+    description: "A street power line is cut",
+    category: "electricity",
+    assetOwner: "unknown",
+    chennai: true,
+  },
+  {
+    description: "சாலையில் மின்கம்பி அறுந்து கிடக்கிறது",
+    category: "road",
+    assetOwner: "unknown",
+    chennai: true,
+  },
+  {
+    description: "A cable is cut near the school",
+    category: "road",
+    assetOwner: "unknown",
+    chennai: true,
+  },
+  {
+    description: "Streetlight cable is cut",
+    category: "lighting",
+    assetOwner: "public",
+    chennai: true,
+  },
+  {
+    description: "Power supply is not available",
+    category: "electricity",
+    assetOwner: "private",
+    chennai: true,
+  },
+  {
+    description: "Power supply is not available",
+    category: "electricity",
+    assetOwner: "unknown",
+    chennai: false,
+  },
+])(
+  "enforces deterministic routing and hazard priority at submission: $description",
+  async (fields) => {
+    const value = { ...draft, ...fields, urgent: false };
+    await as(citizen);
+    const result = await db.query<{ id: string }>(
+      "select public.submit_complaint($1) as id",
+      [value],
+    );
+    const rows = await db.query<{
+      department: string;
+      routing: unknown;
+      draft: { urgent: boolean };
+    }>("select department,routing,draft from public.complaints where id=$1", [
+      result.rows[0].id,
+    ]);
+    const expected = explainRoute(value as Parameters<typeof explainRoute>[0]);
+    expect(rows.rows[0].routing).toEqual(expected);
+    expect(rows.rows[0].department).toBe(expected.department);
+    if (expected.severity === "hazard")
+      expect(rows.rows[0].draft.urgent).toBe(true);
+  },
+);
+it("publishes a safe capability check without exposing routing helper permissions", async () => {
+  await as(citizen);
+  expect(
+    (await db.query<{ v: string }>("select public.routing_version() as v"))
+      .rows[0].v,
+  ).toBe("202611010002");
+  await rejects("select public.routing_decision($1)", [draft]);
 });

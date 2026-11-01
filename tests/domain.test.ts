@@ -1,6 +1,9 @@
+import { routingCases } from "./routing-cases";
 import { describe, it, expect } from "vitest";
 import {
   classify,
+  analyze,
+  explainRoute,
   route,
   draftSchema,
   newComplaint,
@@ -118,4 +121,68 @@ describe("evidence intake", () => {
       validateFile(new Uint8Array([255, 216, 255]), 10485761),
     ).toThrow();
   });
+});
+
+describe("verified bilingual routing", () => {
+  it.each(routingCases)(
+    "classifies and prioritizes %s",
+    (text, category, hazard) => {
+      expect(analyze(text)).toMatchObject({ category, hazard });
+    },
+  );
+  it("prevents a false road choice and urgency downgrade from suppressing electrical safety", () => {
+    const c = newComplaint({
+      ...draft,
+      description: "A street power line is cut and on the road",
+      category: "road",
+      urgent: false,
+    });
+    expect(c.department).toBe("review");
+    expect(c.urgent).toBe(true);
+    expect(c.routing?.severity).toBe("hazard");
+    expect(c.routing?.reason).toContain("conflicts");
+  });
+  it("routes confirmed electricity to distribution and known streetlight cables to GCC", () => {
+    expect(
+      newComplaint({
+        ...draft,
+        description: "A street power line is cut",
+        category: "electricity",
+      }).department,
+    ).toBe("electricity");
+    expect(
+      newComplaint({
+        ...draft,
+        description: "Streetlight cable is cut",
+        category: "lighting",
+      }).department,
+    ).toBe("lighting");
+  });
+  it("triages private assets and out-of-area distribution cases", () => {
+    expect(
+      explainRoute({ ...draft, category: "electricity", assetOwner: "private" })
+        .department,
+    ).toBe("review");
+    expect(
+      explainRoute({ ...draft, category: "electricity", chennai: false })
+        .department,
+    ).toBe("review");
+  });
+});
+
+it("does not assign explicitly private or transmission assets to distribution even with a manual electricity choice", () => {
+  expect(
+    explainRoute({
+      ...draft,
+      category: "electricity",
+      description: "Internal wiring power supply has failed",
+    }).department,
+  ).toBe("review");
+  expect(
+    explainRoute({
+      ...draft,
+      category: "electricity",
+      description: "Transmission supply outage",
+    }).department,
+  ).toBe("review");
 });

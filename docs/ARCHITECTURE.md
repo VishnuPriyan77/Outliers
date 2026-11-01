@@ -31,3 +31,11 @@ The browser-only demo uses localStorage for case metadata and IndexedDB for atta
 Ordinary and urgent cases use 21-day and 1-day internal targets. Overdue is a displayed state, not an automatic closure, emergency dispatch or scheduled escalation. Urgency signals and the review UI advise citizens to contact emergency services directly for immediate danger.
 
 Evidence relevance/authenticity, verified asset ownership, officer team hierarchy, public aggregate analytics, notification delivery and automatic escalation remain future extensions. Current public-facing screens reveal no other citizens' data.
+
+## Routing upgrade 202611010002
+
+The verified directory distinguishes TNPDCL distribution from GCC Electrical streetlighting, GCC stormwater from CMWSSB water/sewers, and municipal road ownership from uncertain roads. Exact official sources and exclusions are recorded in [routing research](ROUTING_RESEARCH.md).
+
+Model output must provide an allowed category, bounded confidence, exact complaint evidence and a review flag. A deterministic bilingual electrical-hazard rule overrides a wrong AI road suggestion. Unsupported/ungrounded/disagreeing or uncertain output goes to triage; the citizen confirms editable fields. The model never supplies an operational department. Immediate hazard guidance appears before submission, and the urgency flag cannot downgrade detected risks.
+
+PostgreSQL recomputes the category safety signal and assignment independently, retains a versioned initial routing explanation, escalates priority and audits submission. Client-supplied authority metadata is ignored. A conflicting citizen category is held for triage rather than silently rerouted. Private, telecom and transmission assets require ownership review. Existing records remain unchanged. Before connected submission the app checks `routing_version()`; stale or missing hosted schema fails closed. The separate transaction-wrapped upgrade is never run automatically. Local SQL tests exercise both migrations and cross-layer routing parity without hosted access.

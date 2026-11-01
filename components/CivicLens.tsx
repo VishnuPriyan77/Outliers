@@ -34,9 +34,11 @@ import {
   categories,
   categoryNames,
   classify,
+  analyze,
+  explainRoute,
+  electricalSafety,
   departments,
   draftSchema,
-  route,
   statusNames,
   urgentSignal,
   validateFile,
@@ -73,6 +75,9 @@ export default function CivicLens() {
     [urgent, setUrgent] = useState(false),
     [chennai, setChennai] = useState(true),
     [ownership, setOwnership] = useState<"municipal" | "unknown">("unknown"),
+    [assetOwner, setAssetOwner] = useState<"public" | "private" | "unknown">(
+      "unknown",
+    ),
     [consent, setConsent] = useState(false),
     [pendingFiles, setPendingFiles] = useState<File[]>([]),
     [aiQuestion, setAiQuestion] = useState(""),
@@ -177,6 +182,18 @@ export default function CivicLens() {
       "யார் பாதிக்கப்படுகிறார்கள்? எப்படி? உடனடி ஆபத்து உள்ளதா?",
     ),
   ];
+  const routing = explainRoute({
+    ...answers,
+    category,
+    chennai,
+    ownership,
+    urgent,
+    assetOwner,
+  });
+  const hazard = urgentSignal(`${answers.description} ${answers.impact}`);
+  const electricalHazard = analyze(
+    `${answers.description} ${answers.impact}`,
+  ).hazard;
   const keys = Object.keys(initial) as (keyof typeof initial)[];
   async function answer() {
     await run(async () => {
@@ -229,7 +246,8 @@ export default function CivicLens() {
         language: lang,
         chennai,
         ownership,
-        urgent,
+        urgent: urgent || hazard,
+        assetOwner,
         consent,
       });
       const created = await repo.submit(d);
@@ -238,6 +256,7 @@ export default function CivicLens() {
       setStep(0);
       setAnswers(initial);
       setConsent(false);
+      setAssetOwner("unknown");
       let failed = 0;
       for (const file of pendingFiles) {
         try {
@@ -828,6 +847,24 @@ export default function CivicLens() {
                           </div>
                         )}
                       </div>
+                      {electricalHazard && (
+                        <div
+                          className="alert warning electrical-hazard"
+                          role="alert"
+                        >
+                          {electricalSafety[lang]}{" "}
+                          <a
+                            href="https://www.tnpdcl.org/en/tnpdcl/"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {t(
+                              "Official TNPDCL guidance",
+                              "TNPDCL அதிகாரப்பூர்வ தகவல்",
+                            )}
+                          </a>
+                        </div>
+                      )}
                       {step < 4 ? (
                         <form
                           className="composer"
@@ -978,6 +1015,36 @@ export default function CivicLens() {
                               </select>
                             </label>
                           </div>
+                          <label>
+                            {t("Asset ownership", "சொத்தின் பொறுப்பு")}
+                            <select
+                              value={assetOwner}
+                              onChange={(e) =>
+                                setAssetOwner(
+                                  e.target.value as typeof assetOwner,
+                                )
+                              }
+                            >
+                              <option value="unknown">
+                                {t(
+                                  "Unknown / officer must verify",
+                                  "தெரியாது / அதிகாரி சரிபார்க்க வேண்டும்",
+                                )}
+                              </option>
+                              <option value="public">
+                                {t(
+                                  "Public service asset (citizen-reported)",
+                                  "பொதுச் சேவை சொத்து (குடிமக்கள் தகவல்)",
+                                )}
+                              </option>
+                              <option value="private">
+                                {t(
+                                  "Private building / private wiring",
+                                  "தனியார் கட்டிடம் / மின் இணைப்பு",
+                                )}
+                              </option>
+                            </select>
+                          </label>
                           <label className="checkbox">
                             <input
                               type="checkbox"
@@ -992,7 +1059,8 @@ export default function CivicLens() {
                           <label className="checkbox">
                             <input
                               type="checkbox"
-                              checked={urgent}
+                              checked={urgent || hazard}
+                              disabled={hazard}
                               onChange={(e) => setUrgent(e.target.checked)}
                             />
                             {t(
@@ -1009,27 +1077,47 @@ export default function CivicLens() {
                                   "மாதிரி வழிமாற்ற முன்னோட்டம்",
                                 )}
                               </small>
-                              <strong>
-                                {
-                                  departments[
-                                    route({ category, chennai, ownership })
-                                  ]
-                                }
-                              </strong>
+                              <strong>{departments[routing.department]}</strong>
                               <p>
-                                {route({ category, chennai, ownership }) ===
-                                "review"
-                                  ? t(
-                                      "Jurisdiction or category needs human verification.",
-                                      "அதிகார வரம்பு அல்லது வகையை மனிதர் சரிபார்க்க வேண்டும்.",
-                                    )
-                                  : t(
-                                      "Based on your confirmed category and reported jurisdiction.",
-                                      "உறுதிசெய்யப்பட்ட வகை மற்றும் அதிகார வரம்பின் அடிப்படையில்.",
-                                    )}
+                                {lang === "ta"
+                                  ? routing.reasonTa
+                                  : routing.reason}
                               </p>
                             </div>
                           </div>
+                          <p className="routing-detail">
+                            {t(
+                              "Classification evidence",
+                              "வகைப்படுத்தல் ஆதாரம்",
+                            )}
+                            :{" "}
+                            {analyze(answers.description).evidence.join(
+                              " · ",
+                            ) ||
+                              t(
+                                "Uncertain; please clarify or choose human review.",
+                                "உறுதியில்லை; விளக்கவும் அல்லது மனிதப் பரிசீலனையைத் தேர்ந்தெடுக்கவும்.",
+                              )}{" "}
+                            ·{" "}
+                            {t(
+                              "Suggestion only — confirm the category above.",
+                              "இது பரிந்துரை மட்டுமே — மேலே உள்ள வகையை உறுதிசெய்யவும்.",
+                            )}
+                          </p>
+                          <p className="routing-detail">
+                            {routing.parent} ·{" "}
+                            {t(
+                              "Directory checked 1 Nov 2026. Local asset ownership still needs verification.",
+                              "அடைவு சரிபார்ப்பு: 1 நவம்பர் 2026. உள்ளூர் சொத்தின் பொறுப்பைச் சரிபார்க்க வேண்டும்.",
+                            )}{" "}
+                            <a
+                              href={routing.source}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {t("Official source", "அதிகாரப்பூர்வ ஆதாரம்")}
+                            </a>
+                          </p>
                           <label className="upload-zone">
                             <Upload size={21} />
                             <strong>
@@ -1292,6 +1380,20 @@ export default function CivicLens() {
                                 )}
                               </small>
                               <p>{departments[c.department]}</p>
+                              {c.routing && (
+                                <p>
+                                  {lang === "ta"
+                                    ? c.routing.reasonTa
+                                    : c.routing.reason}{" "}
+                                  <a
+                                    href={c.routing.source}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {t("Routing source", "வழிமாற்ற ஆதாரம்")}
+                                  </a>
+                                </p>
+                              )}
                             </div>
                             <div>
                               <small>
@@ -1316,6 +1418,14 @@ export default function CivicLens() {
                               </small>
                             </div>
                           </div>
+                          {analyze(`${c.description} ${c.impact}`).hazard && (
+                            <div
+                              className="alert warning electrical-hazard"
+                              role="alert"
+                            >
+                              {electricalSafety[lang]}
+                            </div>
+                          )}
                           {c.urgent && (
                             <div className="safety-note">
                               {t(
