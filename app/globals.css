@@ -1901,3 +1901,24 @@ input::placeholder {
     scroll-behavior: auto !important;
   }
 }
+
+.severity-panel {
+  border-top: 1px solid var(--border);
+  padding: 18px 0;
+  overflow-wrap: anywhere;
+}
+.severity-panel p,
+.severity-panel summary {
+  font-size: 12px;
+}
+.severity-factor {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.severity-factor p {
+  margin: 5px 0;
+}
+.severity-list {
+  font-size: 10px;
+  max-width: 150px;
+}

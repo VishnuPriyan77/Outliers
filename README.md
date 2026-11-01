@@ -19,10 +19,11 @@ Open http://localhost:3000. Demo mode works without credentials: three illustrat
 ## Enable Supabase and OpenRouter
 
 1. In your Supabase project's SQL Editor, run `supabase/migrations/202611010001_civiclens.sql` once. It creates the tables, RLS policies, private evidence bucket, transactional workflow functions and daily AI quota. For CLI-managed projects use `supabase link --project-ref YOUR_REF` followed by `supabase db push` after reviewing the migration.
-2. Privately fill `.env.local` using `.env.example`. Set `NEXT_PUBLIC_DEMO_MODE=false`, the project URL and publishable key. Add the **server-only** service-role key to finalize checked evidence metadata. Never prefix secret keys with `NEXT_PUBLIC_` or commit them.
-3. Add `OPENROUTER_API_KEY` and an available `OPENROUTER_MODEL` supporting JSON output. The app makes server-side Chat Completions requests only to OpenRouter. If the key, model or provider is unavailable, deterministic guided intake still works. No Gemini dependency is assumed. Each account is limited to 30 AI requests per day in Postgres.
-4. Restart the app. Create citizen accounts in the UI and confirm their emails. Configure the Supabase Auth Site URL and redirect allowlist for your actual host. Standard email/password Supabase sessions are used; server endpoints validate the bearer token with `auth.getUser`.
-5. Create separate fictional officer users with Supabase Auth (or the signup screen), then provision them from the SQL Editor using `supabase/provision_officials.example.sql`. Users cannot assign their own officer roles. There are no hardcoded passwords or public privileged seed accounts.
+2. Apply `supabase/migrations/202611010002_severity.sql` after the initial migration. This adds the severity queue/results without changing existing RLS or lifecycle behavior.
+3. Privately fill `.env.local` using `.env.example`. Set `NEXT_PUBLIC_DEMO_MODE=false`, the project URL and publishable key. Add the **server-only** service-role key to finalize checked evidence metadata. Never prefix secret keys with `NEXT_PUBLIC_` or commit them.
+4. Add `OPENROUTER_API_KEY` and an available `OPENROUTER_MODEL` supporting JSON output. The app makes server-side Chat Completions requests only to OpenRouter. If the key, model or provider is unavailable, deterministic guided intake still works. No Gemini dependency is assumed. Each account is limited to 30 AI requests per day in Postgres.
+5. Restart the app. Create citizen accounts in the UI and confirm their emails. Configure the Supabase Auth Site URL and redirect allowlist for your actual host. Standard email/password Supabase sessions are used; server endpoints validate the bearer token with `auth.getUser`.
+6. Create separate fictional officer users with Supabase Auth (or the signup screen), then provision them from the SQL Editor using `supabase/provision_officials.example.sql`. Users cannot assign their own officer roles. There are no hardcoded passwords or public privileged seed accounts.
 
 ## Vercel deployment
 
@@ -33,7 +34,7 @@ See [deployment instructions](docs/DEPLOYMENT.md). `vercel.json` selects the Nex
 - Responsive English/Tamil UI and four-step intake; one question at a time. OpenRouter proposes an enum-validated category, urgency and follow-up. The citizen can edit every report field before confirming.
 - Categories: road damage, water/sewerage, waste, street lighting, and human triage. Unknown ownership, unsupported jurisdiction and uncertain categories route to the review desk. Departments are selected by fixed TypeScript **and SQL** rules, never arbitrary model strings.
 - Citizen-provided Chennai address and ownership declaration. Exact jurisdiction and road ownership remain unverified; no geocoding or verified government directory is implied.
-- Permanent UUID and readable tracking reference, 21-day ordinary / 1-day priority **CivicLens internal targets**, visible overdue state and append-only event records. An expired target never closes a case.
+- Permanent UUID, readable tracking reference and append-only event records. Advisory severity assessment shows six weighted factors, reasoning and confidence, with a separate emergency override. No response-day promises. See [severity engine](docs/SEVERITY.md).
 - Department-scoped officer queue, acknowledgement, work assignment, forwarding with a reason, resolution proof and citizen closure. After an appeal, fresh resolution evidence is required. One appeal is enforced transactionally with a row lock.
 - Private JPEG/PNG/WebP/MP3/WAV/MP4 intake, maximum 4 MB per file and ten attachments per case. Server-side file signature checks, SHA-256 and exact duplicate checks within the case. The 4 MB limit fits Vercel's function request payload ceiling. Original file bytes are preserved. A signature check is **not a full media decode, malware scan or authenticity assessment**.
 - Private evidence downloads via one-minute signed URLs. Report JSON download and print/save-as-PDF via the browser, including history.
@@ -52,7 +53,7 @@ Database tests execute the migration in embedded PostgreSQL (PGlite) with Supaba
 
 ## Limits of this MVP
 
-Media relevance, provenance/C2PA, manipulation detection, transcription, video analysis, automatic SLA escalation, email/SMS notifications, officer-to-field-team subaccounts, maps and real agency integrations are not implemented. Evidence is explicitly marked **authenticity unverified / manual review**. Status history is append-only for application accounts, not tamper-proof against the database administrator. The officer queue and citizen workspace are private; there is no public feed exposing addresses or attachments. Local Supabase CLI/Docker and a deployed Supabase smoke test are optional follow-up checks once access is configured.
+Independent media verification, provenance/C2PA, manipulation detection, transcription, video analysis, automatic SLA escalation, email/SMS notifications, officer-to-field-team subaccounts, maps and real agency integrations are not implemented. Evidence is explicitly marked **authenticity unverified / manual review**. Status history is append-only for application accounts, not tamper-proof against the database administrator. The officer queue and citizen workspace are private; there is no public feed exposing addresses or attachments. Local Supabase CLI/Docker and a deployed Supabase smoke test are optional follow-up checks once access is configured.
 
 See [architecture and trust boundaries](docs/ARCHITECTURE.md) and [a four-minute demo](docs/DEMO.md).
 

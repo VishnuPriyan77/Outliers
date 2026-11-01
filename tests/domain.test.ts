@@ -97,9 +97,9 @@ describe("accountability lifecycle", () => {
     expect(c.status).toBe("closed");
     expect(c.events).toHaveLength(8);
   });
-  it("never resolves a complaint when its internal target expires", () => {
+  it("creates complaints without response-day targets", () => {
     const c = newComplaint(draft);
-    c.due_at = "2020-01-01T00:00:00Z";
+    expect(c.due_at).toBeUndefined();
     expect(c.status).toBe("submitted");
   });
 });

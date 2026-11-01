@@ -86,9 +86,13 @@ export async function listComplaints(): Promise<Complaint[]> {
     .select("*, evidence(*), events(*)")
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
+  const { data: assessments } = await db()
+    .from("severity_assessments")
+    .select("*");
   return (data || []).map((row) => ({
     ...row.draft,
     ...row,
+    severity: assessments?.find((a) => a.complaint_id === row.id) || null,
     events: row.events.sort(
       (a: { created_at: string }, b: { created_at: string }) =>
         a.created_at.localeCompare(b.created_at),
@@ -271,4 +275,17 @@ export async function interview(description: string, language: "en" | "ta") {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error);
   return data;
+}
+
+export async function requestSeverity(complaintId: string) {
+  if (demoMode) return;
+  const response = await fetch("/api/severity", {
+    method: "POST",
+    headers: { ...(await headers()), "Content-Type": "application/json" },
+    body: JSON.stringify({ complaintId }),
+  });
+  if (!response.ok)
+    throw new Error(
+      "Report saved; severity assessment is unavailable. Retry from the report details.",
+    );
 }

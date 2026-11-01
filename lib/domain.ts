@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { contextSchema, type Assessment } from "./severity";
 export const categories = [
   "road",
   "water",
@@ -49,6 +50,9 @@ export const draftSchema = z.object({
   ownership: z.enum(["municipal", "unknown"]),
   urgent: z.boolean(),
   consent: z.literal(true),
+  ai_image_consent: z.boolean().optional(),
+  context_consent: z.boolean().optional(),
+  context_coordinates: contextSchema.optional(),
 });
 export type Draft = z.infer<typeof draftSchema>;
 export type Evidence = {
@@ -77,7 +81,8 @@ export type Complaint = Draft & {
   department: Department;
   status: Status;
   created_at: string;
-  due_at: string;
+  due_at?: string | null; // Legacy storage only; never a response-time promise.
+  severity?: Assessment | null;
   appealed: boolean;
   evidence: Evidence[];
   events: AuditEvent[];
@@ -186,9 +191,6 @@ export function newComplaint(d: Draft): Complaint {
     department: route(d),
     status: "submitted",
     created_at: now.toISOString(),
-    due_at: new Date(
-      now.getTime() + (d.urgent ? 1 : 21) * 86400000,
-    ).toISOString(),
     appealed: false,
     evidence: [],
     events: [

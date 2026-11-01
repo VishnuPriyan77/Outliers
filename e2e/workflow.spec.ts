@@ -24,6 +24,15 @@ test("citizen intake → officer resolution proof → single appeal → close", 
   await expect(
     page.getByRole("heading", { name: "Road damage", exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Severity assessment" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Unavailable in browser-only demo"),
+  ).toBeVisible();
+  await expect(page.getByText("CIVICLENS TARGET", { exact: true })).toHaveCount(
+    0,
+  );
   await page.getByRole("button", { name: "Official dashboard" }).click();
   await page
     .getByRole("button")
@@ -37,16 +46,14 @@ test("citizen intake → officer resolution proof → single appeal → close", 
     .getByRole("textbox", { name: "Add a clear update or reason (required)" })
     .fill("Road repair team has been assigned");
   await page.getByRole("button", { name: "Start / assign work" }).click();
-  await page
-    .getByLabel("Upload resolution evidence")
-    .setInputFiles({
-      name: "repair.png",
-      mimeType: "image/png",
-      buffer: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8WQAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    });
+  await page.getByLabel("Upload resolution evidence").setInputFiles({
+    name: "repair.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8WQAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
   await expect(page.getByText("repair.png", { exact: true })).toBeVisible();
   await page
     .getByRole("textbox", { name: "Add a clear update or reason (required)" })
@@ -71,16 +78,14 @@ test("citizen intake → officer resolution proof → single appeal → close", 
     .getByRole("textbox", { name: "Add a clear update or reason (required)" })
     .fill("Appeal accepted and follow-up inspection assigned");
   await page.getByRole("button", { name: "Start / assign work" }).click();
-  await page
-    .getByLabel("Upload resolution evidence")
-    .setInputFiles({
-      name: "followup.png",
-      mimeType: "image/png",
-      buffer: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8WQAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    });
+  await page.getByLabel("Upload resolution evidence").setInputFiles({
+    name: "followup.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8WQAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
   await expect(page.getByText("followup.png", { exact: true })).toBeVisible();
   await page
     .getByRole("textbox", { name: "Add a clear update or reason (required)" })

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -42,6 +42,7 @@ import {
   validateFile,
 } from "@/lib/domain";
 import { demoMode, supabase } from "@/lib/supabase";
+import { SeverityPanel } from "./SeverityPanel";
 import * as repo from "@/lib/repository";
 type View = "overview" | "report" | "track" | "official";
 const initial = { description: "", location: "", duration: "", impact: "" };
@@ -74,6 +75,10 @@ export default function CivicLens() {
     [chennai, setChennai] = useState(true),
     [ownership, setOwnership] = useState<"municipal" | "unknown">("unknown"),
     [consent, setConsent] = useState(false),
+    [imageConsent, setImageConsent] = useState(false),
+    [contextConsent, setContextConsent] = useState(false),
+    [latitude, setLatitude] = useState(""),
+    [longitude, setLongitude] = useState(""),
     [pendingFiles, setPendingFiles] = useState<File[]>([]),
     [aiQuestion, setAiQuestion] = useState(""),
     [source, setSource] = useState("guided");
@@ -84,11 +89,11 @@ export default function CivicLens() {
   const fileRef = useRef<HTMLInputElement>(null),
     messageRef = useRef<HTMLTextAreaElement>(null);
   const t = (en: string, ta: string) => (lang === "en" ? en : ta);
-  async function refresh() {
+  const refresh = useCallback(async () => {
     const values = await repo.listComplaints();
     setCases(values);
     return values;
-  }
+  }, []);
   useEffect(() => {
     document.documentElement.lang = lang;
   }, [lang]);
@@ -223,6 +228,16 @@ export default function CivicLens() {
   }
   async function confirm() {
     await run(async () => {
+      if (
+        contextConsent &&
+        Boolean(latitude.trim()) !== Boolean(longitude.trim())
+      )
+        throw new Error(
+          t(
+            "Provide both incident coordinates or leave both blank.",
+            "இரண்டு ஆயத்தொலைவுகளையும் உள்ளிடவும் அல்லது இரண்டையும் காலியாக விடவும்.",
+          ),
+        );
       const d = draftSchema.parse({
         ...answers,
         category,
@@ -231,6 +246,16 @@ export default function CivicLens() {
         ownership,
         urgent,
         consent,
+        ai_image_consent: imageConsent,
+        context_consent: contextConsent,
+        ...(contextConsent && latitude.trim() && longitude.trim()
+          ? {
+              context_coordinates: {
+                latitude: Number(latitude),
+                longitude: Number(longitude),
+              },
+            }
+          : {}),
       });
       const created = await repo.submit(d);
       setSelected(created.id);
@@ -247,6 +272,16 @@ export default function CivicLens() {
         }
       }
       setPendingFiles([]);
+      setImageConsent(false);
+      setContextConsent(false);
+      setLatitude("");
+      setLongitude("");
+      let assessmentUnavailable = false;
+      try {
+        await repo.requestSeverity(created.id);
+      } catch {
+        assessmentUnavailable = true;
+      }
       await refresh();
       setNotice(
         failed
@@ -259,6 +294,11 @@ export default function CivicLens() {
               "உங்கள் புகார் பதிவாகியுள்ளது. காலவரிசையில் புதுப்பிப்புகளைக் காணலாம்.",
             ),
       );
+      if (assessmentUnavailable)
+        setNotice(
+          (current) =>
+            `${current} ${t("Severity assessment is unavailable; retry from report details.", "தீவிர மதிப்பீட்டை மீண்டும் முயற்சிக்கவும்.")}`,
+        );
     });
   }
   async function filesPicked(files: FileList | null, existing?: Complaint) {
@@ -271,6 +311,13 @@ export default function CivicLens() {
             file,
             isOfficial ? "resolution" : "report",
           );
+        if (!isOfficial) {
+          try {
+            await repo.requestSeverity(existing.id);
+          } catch {
+            /* Report/evidence stay saved; panel offers retry. */
+          }
+        }
         await refresh();
         setNotice(
           t(
@@ -1074,6 +1121,78 @@ export default function CivicLens() {
                               "கோப்புகள் தனிப்பட்டவை. கோப்பின் ஒருமைப்பாடும் நகல்களும் சரிபார்க்கப்படும்; தொடர்புத்தன்மை, தோற்றம், உண்மைத்தன்மைக்கு மனிதப் பரிசீலனை தேவை.",
                             )}
                           </p>
+                          {!demoMode && (
+                            <>
+                              <label className="checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={imageConsent}
+                                  onChange={(e) =>
+                                    setImageConsent(e.target.checked)
+                                  }
+                                />
+                                {t(
+                                  "I allow one report image to be sent to OpenRouter and its model provider for severity assessment. Remove faces, number plates and private details first. Metadata is stripped; consent is optional and does not affect submission.",
+                                  "தீவிர மதிப்பீட்டிற்காக ஒரு படத்தை OpenRouter மற்றும் அதன் AI வழங்குநருக்கு அனுப்ப ஒப்புக்கொள்கிறேன். முகங்கள், வாகன எண்கள், தனிப்பட்ட விவரங்களை முதலில் நீக்கவும். ஒப்புதல் விருப்பமானது.",
+                                )}
+                              </label>
+                              <label className="checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={contextConsent}
+                                  onChange={(e) =>
+                                    setContextConsent(e.target.checked)
+                                  }
+                                />
+                                {t(
+                                  "I allow rounded incident coordinates (not my home address) to be sent to OpenStreetMap/Nominatim, Overpass and Open-Meteo for nearby places, road and weather context. Optional.",
+                                  "அருகிலுள்ள இடங்கள், சாலை மற்றும் வானிலைக்காக சம்பவ இடத்தின் தோராயமான ஆயத்தொலைவுகளை வெளிச் சேவைகளுடன் பகிர ஒப்புக்கொள்கிறேன். விருப்பமானது.",
+                                )}
+                              </label>
+                              {contextConsent && (
+                                <div className="form-row">
+                                  <label>
+                                    {t(
+                                      "Incident latitude (optional)",
+                                      "சம்பவ அட்சரேகை (விருப்பம்)",
+                                    )}
+                                    <input
+                                      type="number"
+                                      min="-90"
+                                      max="90"
+                                      step="any"
+                                      value={latitude}
+                                      onChange={(e) =>
+                                        setLatitude(e.target.value)
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    {t(
+                                      "Incident longitude (optional)",
+                                      "சம்பவ தீர்க்கரேகை (விருப்பம்)",
+                                    )}
+                                    <input
+                                      type="number"
+                                      min="-180"
+                                      max="180"
+                                      step="any"
+                                      value={longitude}
+                                      onChange={(e) =>
+                                        setLongitude(e.target.value)
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                              )}
+                              <p className="muted">
+                                {t(
+                                  "Severity AI receives category and extracted hazard signals, not your raw report text or address. Missing context stays unknown; assessment is advisory.",
+                                  "AI வகை மற்றும் ஆபத்துக் குறிகளை மட்டும் பெறுகிறது; உங்கள் முழு உரை அல்லது முகவரியை அல்ல. தெரியாத தகவல் ஊகிக்கப்படாது.",
+                                )}
+                              </p>
+                            </>
+                          )}
                           <label className="checkbox consent">
                             <input
                               type="checkbox"
@@ -1293,29 +1412,12 @@ export default function CivicLens() {
                               </small>
                               <p>{departments[c.department]}</p>
                             </div>
-                            <div>
-                              <small>
-                                {t("CIVICLENS TARGET", "CIVICLENS இலக்கு")}
-                              </small>
-                              <p>
-                                {when(c.due_at, lang)}{" "}
-                                {new Date(c.due_at) < new Date() &&
-                                  !["closed", "resolved"].includes(
-                                    c.status,
-                                  ) && (
-                                    <span className="overdue">
-                                      {t("Overdue", "காலக்கெடு கடந்தது")}
-                                    </span>
-                                  )}
-                              </p>
-                              <small>
-                                {t(
-                                  "Internal target, not an official agency commitment. Expiry never closes a report.",
-                                  "உள் இலக்கு; அதிகாரப்பூர்வ வாக்குறுதி அல்ல. காலக்கெடு முடிவதால் புகார் மூடப்படாது.",
-                                )}
-                              </small>
-                            </div>
                           </div>
+                          <SeverityPanel
+                            complaint={c}
+                            lang={lang}
+                            onRefresh={refresh}
+                          />
                           {c.urgent && (
                             <div className="safety-note">
                               {t(
@@ -1828,6 +1930,12 @@ function ReportList({
                 <span className="row-separator">·</span>
                 {c.reference}
               </small>
+            </span>
+            <span className="severity-list">
+              {c.severity?.result?.priority ||
+                (c.urgent || urgentSignal(`${c.description} ${c.impact}`)
+                  ? "P1 · Emergency review"
+                  : "Severity pending / incomplete")}
             </span>
             <Badge status={c.status} lang={lang} />
             <ChevronRight size={17} className="row-chevron" />

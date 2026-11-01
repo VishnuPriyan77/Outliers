@@ -53,6 +53,9 @@ beforeAll(async () => {
       "utf8",
     ).replace("create extension if not exists pgcrypto;", ""),
   );
+  await db.exec(
+    readFileSync("supabase/migrations/202611010002_severity.sql", "utf8"),
+  );
   await db.query("insert into public.officials values($1,$2,$3),($4,$5,$6)", [
     roads,
     "Demo roads officer",
@@ -236,4 +239,284 @@ it("permits only 30 AI calls per account per day", async () => {
       )
     ).rows[0].allowed,
   ).toBe(false);
+});
+
+it("queues assessments without response-day targets and preserves assessment RLS", async () => {
+  await as(other);
+  const { rows } = await db.query<{ id: string }>(
+    "select public.submit_complaint($1) as id",
+    [{ ...draft, ai_image_consent: false }],
+  );
+  const severityId = rows[0].id;
+  expect(
+    (
+      await db.query<{ due_at: null }>(
+        "select due_at from public.complaints where id=$1",
+        [severityId],
+      )
+    ).rows[0].due_at,
+  ).toBeNull();
+  expect(
+    (
+      await db.query(
+        "select * from public.severity_assessments where complaint_id=$1",
+        [severityId],
+      )
+    ).rows,
+  ).toHaveLength(1);
+  await rejects(
+    "update public.severity_assessments set status='completed' where complaint_id=$1",
+    [severityId],
+  );
+  await rejects("select public.claim_severity($1,$2)", [severityId, other]);
+  await as(citizen);
+  expect(
+    (
+      await db.query(
+        "select * from public.severity_assessments where complaint_id=$1",
+        [severityId],
+      )
+    ).rows,
+  ).toHaveLength(0);
+  await as(water);
+  expect(
+    (
+      await db.query(
+        "select * from public.severity_assessments where complaint_id=$1",
+        [severityId],
+      )
+    ).rows,
+  ).toHaveLength(0);
+  await as(roads);
+  expect(
+    (
+      await db.query(
+        "select * from public.severity_assessments where complaint_id=$1",
+        [severityId],
+      )
+    ).rows,
+  ).toHaveLength(1);
+});
+it("validates consent and coordinates in SQL even for direct RPC callers", async () => {
+  await as(other);
+  for (const extra of [
+    { ai_image_consent: "true" },
+    { context_consent: 1 },
+    { context_coordinates: { latitude: 91, longitude: 80 } },
+    { context_coordinates: { latitude: "13", longitude: 80 } },
+  ]) {
+    await rejects("select public.submit_complaint($1)", [
+      { ...draft, ...extra },
+    ]);
+  }
+});
+it("claims jobs once, enforces leases, persists results and limits retries", async () => {
+  await as(other);
+  const { rows } = await db.query<{ id: string }>(
+    "select public.submit_complaint($1) as id",
+    [draft],
+  );
+  const severityId = rows[0].id;
+  await as(other, "service_role");
+  const claim = async (actor = other) =>
+    (
+      await db.query<{ job: { lease: string } | null }>(
+        "select public.claim_severity($1,$2) as job",
+        [severityId, actor],
+      )
+    ).rows[0].job;
+  expect(await claim(water)).toBeNull();
+  const first = await claim();
+  expect(first?.lease).toBeTruthy();
+  expect(await claim()).toBeNull();
+  expect(
+    (
+      await db.query<{ ok: boolean }>(
+        "select public.finish_severity($1,$2,$3,$4) as ok",
+        [severityId, citizen, null, "failed"],
+      )
+    ).rows[0].ok,
+  ).toBe(false);
+  await db.query("select public.finish_severity($1,$2,$3,$4)", [
+    severityId,
+    first!.lease,
+    null,
+    "Provider unavailable",
+  ]);
+  expect(await claim()).toBeNull(); // cooldown
+  for (let i = 0; i < 2; i++) {
+    await db.exec(
+      "reset role; update public.severity_assessments set updated_at=now()-interval '3 minutes' where complaint_id='" +
+        severityId +
+        "'",
+    );
+    await as(other, "service_role");
+    const job = await claim();
+    expect(job?.lease).toBeTruthy();
+    await db.query("select public.finish_severity($1,$2,$3,$4)", [
+      severityId,
+      job!.lease,
+      null,
+      "Provider unavailable",
+    ]);
+  }
+  await db.exec(
+    "reset role; update public.severity_assessments set updated_at=now()-interval '3 minutes' where complaint_id='" +
+      severityId +
+      "'",
+  );
+  await as(other, "service_role");
+  expect(await claim()).toBeNull(); // three attempts total
+});
+it("counts distinct nearby citizens and never exposes their reports", async () => {
+  const located = {
+    ...draft,
+    context_consent: true,
+    context_coordinates: { latitude: 13.001, longitude: 80.001 },
+  };
+  await as(roads);
+  await db.query("select public.submit_complaint($1)", [located]);
+  await db.query("select public.submit_complaint($1)", [located]);
+  await as(other);
+  const { rows } = await db.query<{ id: string }>(
+    "select public.submit_complaint($1) as id",
+    [located],
+  );
+  await as(other, "service_role");
+  const job = (
+    await db.query<{ job: { corroboration: number; lease: string } }>(
+      "select public.claim_severity($1,$2) as job",
+      [rows[0].id, other],
+    )
+  ).rows[0].job;
+  expect(job.corroboration).toBe(1);
+  await db.query("select public.finish_severity($1,$2,$3,$4)", [
+    rows[0].id,
+    job.lease,
+    { score: null, coverage: 10 },
+    null,
+  ]);
+  await as(other);
+  expect(
+    (
+      await db.query<{ status: string }>(
+        "select status from public.severity_assessments where complaint_id=$1",
+        [rows[0].id],
+      )
+    ).rows[0].status,
+  ).toBe("partial");
+});
+it("globally rate limits Nominatim and prevents client access to its gate", async () => {
+  await as(other);
+  await rejects("select public.severity_nominatim_slot()");
+  await as(other, "service_role");
+  expect(
+    (
+      await db.query<{ ok: boolean }>(
+        "select public.severity_nominatim_slot() as ok",
+      )
+    ).rows[0].ok,
+  ).toBe(true);
+  expect(
+    (
+      await db.query<{ ok: boolean }>(
+        "select public.severity_nominatim_slot() as ok",
+      )
+    ).rows[0].ok,
+  ).toBe(false);
+});
+it("recovers stale leases and invalidates in-flight results when report evidence changes", async () => {
+  await as(other);
+  const { rows } = await db.query<{ id: string }>(
+    "select public.submit_complaint($1) as id",
+    [draft],
+  );
+  const severityId = rows[0].id;
+  await as(other, "service_role");
+  const claim = async () =>
+    (
+      await db.query<{ job: { lease: string } }>(
+        "select public.claim_severity($1,$2) as job",
+        [severityId, other],
+      )
+    ).rows[0].job;
+  const first = await claim();
+  await db.exec(
+    "reset role; update public.severity_assessments set updated_at=now()-interval '3 minutes' where complaint_id='" +
+      severityId +
+      "'",
+  );
+  await as(other, "service_role");
+  const recovered = await claim();
+  expect(recovered.lease).not.toBe(first.lease);
+  expect(
+    (
+      await db.query<{ ok: boolean }>(
+        "select public.finish_severity($1,$2,$3,$4) as ok",
+        [severityId, first.lease, null, "old"],
+      )
+    ).rows[0].ok,
+  ).toBe(false);
+  await as(other);
+  const path = `${other}/${severityId}/fresh-report`;
+  await db.query(
+    "insert into storage.objects(bucket_id,name) values('evidence',$1)",
+    [path],
+  );
+  await as(other, "service_role");
+  await db.query("select public.attach_evidence($1,$2,$3,$4,$5,$6,$7,$8)", [
+    other,
+    severityId,
+    path,
+    "hazard.jpg",
+    "image/jpeg",
+    4,
+    "c".repeat(64),
+    "report",
+  ]);
+  expect(
+    (
+      await db.query<{ ok: boolean }>(
+        "select public.finish_severity($1,$2,$3,$4) as ok",
+        [severityId, recovered.lease, { score: 90 }, null],
+      )
+    ).rows[0].ok,
+  ).toBe(false);
+  expect(
+    (
+      await db.query<{ status: string; attempts: number }>(
+        "select status,attempts from public.severity_assessments where complaint_id=$1",
+        [severityId],
+      )
+    ).rows[0],
+  ).toEqual({ status: "pending", attempts: 0 });
+});
+it("marks a crashed final attempt failed instead of leaving it processing forever", async () => {
+  await as(other);
+  const { rows } = await db.query<{ id: string }>(
+    "select public.submit_complaint($1) as id",
+    [draft],
+  );
+  await db.exec("reset role");
+  await db.query(
+    "update public.severity_assessments set status='processing',attempts=3,lease=gen_random_uuid(),updated_at=now()-interval '3 minutes' where complaint_id=$1",
+    [rows[0].id],
+  );
+  await as(other, "service_role");
+  expect(
+    (
+      await db.query<{ job: null }>(
+        "select public.claim_severity($1,$2) as job",
+        [rows[0].id, other],
+      )
+    ).rows[0].job,
+  ).toBeNull();
+  expect(
+    (
+      await db.query<{ status: string; lease: null }>(
+        "select status,lease from public.severity_assessments where complaint_id=$1",
+        [rows[0].id],
+      )
+    ).rows[0],
+  ).toEqual({ status: "failed", lease: null });
 });
