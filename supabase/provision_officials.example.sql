@@ -1,0 +1,8 @@
+-- Run privately in Supabase SQL Editor after creating separate fictional Auth users.
+-- Replace each UUID with the corresponding Auth user ID, never a password.
+-- Keep real government identities/contact details out of this demo.
+-- Available departments: roads, water, waste, lighting, review.
+-- Example (uncomment and replace the UUID):
+-- insert into public.officials(user_id,display_name,department)
+-- values ('REPLACE_WITH_AUTH_USER_UUID','Arun - Demo Roads Officer','roads');
+-- To change/revoke an officer role, use the SQL Editor as project administrator.
